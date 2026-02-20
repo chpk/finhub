@@ -16,26 +16,56 @@ import type {
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8888";
 
-/* ── Simple client-side cache ─────────────────────────────────────── */
+/* ── Persistent client-side cache (survives SPA navigation) ──────── */
 
-const _cache = new Map<string, { data: unknown; expires: number }>();
+const _memCache = new Map<string, { data: unknown; expires: number }>();
 const DEFAULT_TTL = 60_000; // 60 seconds
 
+function _ssKey(key: string): string {
+  return `nfra_cache_${key}`;
+}
+
 function getCached<T>(key: string): T | null {
-  const entry = _cache.get(key);
-  if (entry && Date.now() < entry.expires) return entry.data as T;
-  _cache.delete(key);
+  const mem = _memCache.get(key);
+  if (mem && Date.now() < mem.expires) return mem.data as T;
+  _memCache.delete(key);
+  if (typeof sessionStorage === "undefined") return null;
+  try {
+    const raw = sessionStorage.getItem(_ssKey(key));
+    if (!raw) return null;
+    const entry = JSON.parse(raw) as { data: unknown; expires: number };
+    if (Date.now() < entry.expires) {
+      _memCache.set(key, entry);
+      return entry.data as T;
+    }
+    sessionStorage.removeItem(_ssKey(key));
+  } catch { /* ignore */ }
   return null;
 }
 
 function setCache(key: string, data: unknown, ttl = DEFAULT_TTL): void {
-  _cache.set(key, { data, expires: Date.now() + ttl });
+  const entry = { data, expires: Date.now() + ttl };
+  _memCache.set(key, entry);
+  if (typeof sessionStorage !== "undefined") {
+    try { sessionStorage.setItem(_ssKey(key), JSON.stringify(entry)); } catch { /* quota */ }
+  }
 }
 
 export function invalidateCache(prefix?: string): void {
-  if (!prefix) { _cache.clear(); return; }
-  for (const key of _cache.keys()) {
-    if (key.startsWith(prefix)) _cache.delete(key);
+  if (!prefix) {
+    _memCache.clear();
+    if (typeof sessionStorage !== "undefined") {
+      const keys = Object.keys(sessionStorage).filter(k => k.startsWith("nfra_cache_"));
+      keys.forEach(k => sessionStorage.removeItem(k));
+    }
+    return;
+  }
+  for (const key of _memCache.keys()) {
+    if (key.startsWith(prefix)) _memCache.delete(key);
+  }
+  if (typeof sessionStorage !== "undefined") {
+    const keys = Object.keys(sessionStorage).filter(k => k.startsWith(`nfra_cache_${prefix}`));
+    keys.forEach(k => sessionStorage.removeItem(k));
   }
 }
 
@@ -73,6 +103,24 @@ async function cachedRequest<T>(
   return data;
 }
 
+/**
+ * Stale-while-revalidate: return stale data instantly if available,
+ * then refresh in the background. If no stale data, fetch fresh.
+ */
+async function swrRequest<T>(
+  path: string,
+  ttl = DEFAULT_TTL,
+): Promise<T> {
+  const cached = getCached<T>(path);
+  if (cached) {
+    request<T>(path).then(fresh => setCache(path, fresh, ttl)).catch(() => {});
+    return cached;
+  }
+  const data = await request<T>(path);
+  setCache(path, data, ttl);
+  return data;
+}
+
 /* ── Ingest ───────────────────────────────────────────────────────── */
 
 export async function uploadDocument(
@@ -98,7 +146,7 @@ export async function getDocuments(
   skip = 0,
   limit = 50
 ): Promise<DocumentRecord[]> {
-  return cachedRequest<DocumentRecord[]>(
+  return swrRequest<DocumentRecord[]>(
     `/api/ingest/documents?skip=${skip}&limit=${limit}`,
     45_000,
   );
@@ -169,7 +217,7 @@ export async function getComplianceReports(
   skip = 0,
   limit = 50
 ): Promise<ComplianceReport[]> {
-  return cachedRequest<ComplianceReport[]>(
+  return swrRequest<ComplianceReport[]>(
     `/api/compliance/reports?skip=${skip}&limit=${limit}`,
     45_000,
   );
@@ -182,7 +230,7 @@ export async function getComplianceReport(
 }
 
 export async function getFrameworks(): Promise<FrameworkInfo[]> {
-  return cachedRequest<FrameworkInfo[]>("/api/compliance/frameworks", 120_000);
+  return swrRequest<FrameworkInfo[]>("/api/compliance/frameworks", 120_000);
 }
 
 /* ── Search ───────────────────────────────────────────────────────── */
@@ -225,7 +273,7 @@ export async function getChatSessions(
   skip = 0,
   limit = 20
 ): Promise<ChatSession[]> {
-  return cachedRequest<ChatSession[]>(
+  return swrRequest<ChatSession[]>(
     `/api/chat/sessions?skip=${skip}&limit=${limit}`,
     30_000,
   );
@@ -249,7 +297,7 @@ export async function deleteChatSession(
 
 export async function getDashboardStats(): Promise<DashboardStats> {
   try {
-    return await cachedRequest<DashboardStats>(
+    return await swrRequest<DashboardStats>(
       "/api/dashboard/stats",
       30_000,
     );
@@ -326,7 +374,7 @@ export async function getAnalyticsDocuments(
   skip = 0,
   limit = 50
 ): Promise<AnalyticsDocument[]> {
-  return cachedRequest<AnalyticsDocument[]>(
+  return swrRequest<AnalyticsDocument[]>(
     `/api/analytics/documents?skip=${skip}&limit=${limit}`,
     45_000,
   );

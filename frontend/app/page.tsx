@@ -12,31 +12,41 @@ import { getDashboardStats, getComplianceReports } from "@/lib/api";
 import type { DashboardStats, ComplianceReport } from "@/lib/types";
 
 export default function DashboardPage() {
-  const [stats, setStats] = useState<DashboardStats>({
-    documents_ingested: 0,
-    compliance_checks: 0,
-    average_score: 0,
-    active_frameworks: 0,
-  });
+  const [stats, setStats] = useState<DashboardStats | null>(null);
   const [reports, setReports] = useState<ComplianceReport[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    async function load() {
+    let cancelled = false;
+
+    async function load(attempt = 0) {
       try {
         const [s, r] = await Promise.all([
           getDashboardStats(),
           getComplianceReports(0, 10).catch(() => []),
         ]);
-        setStats(s);
-        setReports(r);
+        if (!cancelled) {
+          setStats(s);
+          setReports(r);
+          setLoading(false);
+        }
       } catch {
-        // Silently handle - stats will show defaults
-      } finally {
-        setLoading(false);
+        if (!cancelled && attempt < 2) {
+          setTimeout(() => load(attempt + 1), 1500);
+        } else if (!cancelled) {
+          setStats({
+            documents_ingested: 0,
+            compliance_checks: 0,
+            average_score: 0,
+            active_frameworks: 0,
+          });
+          setLoading(false);
+        }
       }
     }
     load();
+
+    return () => { cancelled = true; };
   }, []);
 
   const quickActions = [
@@ -86,7 +96,7 @@ export default function DashboardPage() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.6, delay: 0.15 }}
       >
-        <StatsCards stats={stats} loading={loading} />
+        <StatsCards stats={stats ?? { documents_ingested: 0, compliance_checks: 0, average_score: 0, active_frameworks: 0 }} loading={loading} />
       </motion.div>
 
       {/* Quick Actions */}

@@ -254,10 +254,8 @@ async def list_reports(
         skip=skip,
         limit=limit,
         sort=[("created_at", -1)],
+        projection={"results": 0},
     )
-    # Strip heavy results list for listing endpoint
-    for r in reports:
-        r.pop("results", None)
     return reports
 
 

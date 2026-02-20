@@ -5,7 +5,7 @@ import { motion } from "framer-motion";
 import { FileUploader } from "@/components/ingest/FileUploader";
 import { ProcessingStatus } from "@/components/ingest/ProcessingStatus";
 import { DocumentList } from "@/components/ingest/DocumentList";
-import { getDocuments } from "@/lib/api";
+import { getDocuments, invalidateCache } from "@/lib/api";
 import type { DocumentRecord, UploadResponse } from "@/lib/types";
 
 export default function IngestPage() {
@@ -30,6 +30,8 @@ export default function IngestPage() {
 
   const handleUploadComplete = (result: UploadResponse) => {
     setActiveDocId(result.document_id);
+    invalidateCache("/api/ingest");
+    invalidateCache("/api/dashboard");
     setTimeout(() => loadDocuments(), 2000);
     setTimeout(() => loadDocuments(), 8000);
     setTimeout(() => loadDocuments(), 20000);

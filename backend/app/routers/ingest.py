@@ -266,9 +266,23 @@ async def get_processing_status(
 # GET /documents — paginated listing
 # ---------------------------------------------------------------------------
 
+_LIST_PROJECTION = {
+    "filename": 1,
+    "status": 1,
+    "file_path": 1,
+    "total_pages": 1,
+    "elements_count": 1,
+    "tables_count": 1,
+    "chunks_count": 1,
+    "processing_time": 1,
+    "metadata": 1,
+    "created_at": 1,
+    "updated_at": 1,
+}
+
+
 @router.get(
     "/documents",
-    response_model=list[DocumentRecord],
     summary="List all ingested documents",
 )
 async def list_documents(
@@ -277,7 +291,7 @@ async def list_documents(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> list[dict[str, Any]]:
-    """List documents, optionally filtered by status, with pagination."""
+    """List documents with lightweight projection (excludes elements, tables, sections blobs)."""
     mongo = _mongo(request)
     query: dict[str, Any] = {}
     if status:
@@ -289,8 +303,9 @@ async def list_documents(
         skip=skip,
         limit=limit,
         sort=[("created_at", -1)],
+        projection=_LIST_PROJECTION,
     )
-    return docs  # type: ignore[return-value]
+    return docs
 
 
 # ---------------------------------------------------------------------------

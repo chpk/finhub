@@ -116,6 +116,14 @@ async def list_documents(
         skip=skip,
         limit=limit,
         sort=[("created_at", -1)],
+        projection={
+            "filename": 1,
+            "status": 1,
+            "total_pages": 1,
+            "tables_count": 1,
+            "elements_count": 1,
+            "created_at": 1,
+        },
     )
 
     return [

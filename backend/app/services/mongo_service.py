@@ -97,9 +97,10 @@ class MongoService:
         skip: int = 0,
         limit: int = 50,
         sort: list[tuple[str, int]] | None = None,
+        projection: dict[str, int] | None = None,
     ) -> list[dict[str, Any]]:
-        """Return multiple documents with pagination and optional sort."""
-        cursor = self._db[collection].find(query or {})
+        """Return multiple documents with pagination and optional sort/projection."""
+        cursor = self._db[collection].find(query or {}, projection)
         if sort:
             cursor = cursor.sort(sort)
         cursor = cursor.skip(skip).limit(limit)
@@ -172,3 +173,18 @@ class MongoService:
     ) -> int:
         """Return the count of documents matching *query*."""
         return await self._db[collection].count_documents(query or {})
+
+    async def fast_count(self, collection: str) -> int:
+        """Fast estimated count (no collection scan). Use for dashboards."""
+        try:
+            return await self._db[collection].estimated_document_count()
+        except Exception:
+            return await self._db[collection].count_documents({})
+
+    async def ping(self) -> bool:
+        """Ping the database to check connectivity."""
+        try:
+            await self._db.command("ping")
+            return True
+        except Exception:
+            return False
