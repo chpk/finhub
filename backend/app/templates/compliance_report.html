@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Compliance Report — {{ document_name }}</title>
+  <style>
+    /* ── Reset & Base ─────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+      color: #1d1d1f;
+      background: #fff;
+      font-size: 11pt;
+      line-height: 1.55;
+    }
+
+    /* ── Cover Page ───────────────────────────────────────────────── */
+    .cover {
+      page-break-after: always;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      text-align: center;
+      padding: 60px 40px;
+    }
+    .cover .logo {
+      font-size: 14pt;
+      font-weight: 600;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: #86868b;
+      margin-bottom: 48px;
+    }
+    .cover h1 {
+      font-size: 28pt;
+      font-weight: 700;
+      color: #1d1d1f;
+      margin-bottom: 12px;
+    }
+    .cover .subtitle {
+      font-size: 14pt;
+      color: #515154;
+      margin-bottom: 48px;
+    }
+    .cover .meta-table {
+      margin: 0 auto;
+      border-collapse: collapse;
+    }
+    .cover .meta-table td {
+      padding: 6px 20px;
+      font-size: 11pt;
+    }
+    .cover .meta-table td:first-child {
+      color: #86868b;
+      text-align: right;
+      font-weight: 500;
+    }
+    .cover .meta-table td:last-child {
+      text-align: left;
+      font-weight: 600;
+    }
+    .cover .score-badge {
+      display: inline-block;
+      margin-top: 40px;
+      padding: 16px 40px;
+      border-radius: 16px;
+      font-size: 20pt;
+      font-weight: 700;
+      color: #fff;
+    }
+    .score-green  { background: #30d158; }
+    .score-amber  { background: #ff9f0a; }
+    .score-red    { background: #ff3b30; }
+    .score-grey   { background: #86868b; }
+
+    /* ── Page Layout ──────────────────────────────────────────────── */
+    .page { padding: 40px 50px; page-break-after: always; }
+    .page:last-child { page-break-after: auto; }
+
+    h2 {
+      font-size: 16pt;
+      font-weight: 700;
+      color: #1d1d1f;
+      border-bottom: 2px solid #0071e3;
+      padding-bottom: 6px;
+      margin-bottom: 20px;
+    }
+    h3 {
+      font-size: 12pt;
+      font-weight: 600;
+      color: #515154;
+      margin: 20px 0 10px;
+    }
+    p { margin-bottom: 12px; }
+
+    /* ── Summary Stats Grid ───────────────────────────────────────── */
+    .stats-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .stat-card {
+      flex: 1;
+      min-width: 120px;
+      padding: 16px;
+      border-radius: 12px;
+      border: 1px solid #e5e5e7;
+      text-align: center;
+    }
+    .stat-card .number {
+      font-size: 22pt;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+    .stat-card .label {
+      font-size: 9pt;
+      color: #86868b;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-top: 4px;
+    }
+
+    /* ── Tables ────────────────────────────────────────────────────── */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 24px;
+      font-size: 9.5pt;
+    }
+    thead th {
+      background: #f5f5f7;
+      font-weight: 600;
+      text-align: left;
+      padding: 10px 12px;
+      border-bottom: 2px solid #d2d2d7;
+      white-space: nowrap;
+    }
+    tbody td {
+      padding: 8px 12px;
+      border-bottom: 1px solid #e5e5e7;
+      vertical-align: top;
+    }
+    tbody tr:nth-child(even) { background: #fafafa; }
+
+    /* ── Status badges ────────────────────────────────────────────── */
+    .badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 8.5pt;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .badge-compliant          { background: #d1f5d3; color: #1b7a2d; }
+    .badge-non_compliant      { background: #ffd4d1; color: #c9302c; }
+    .badge-partially_compliant { background: #fff0c7; color: #8a6d00; }
+    .badge-not_applicable     { background: #e5e5e7; color: #6e6e73; }
+    .badge-unable_to_determine { background: #e5e5e7; color: #6e6e73; }
+
+    /* ── Finding card ─────────────────────────────────────────────── */
+    .finding {
+      border: 1px solid #e5e5e7;
+      border-radius: 12px;
+      padding: 16px 20px;
+      margin-bottom: 16px;
+      page-break-inside: avoid;
+    }
+    .finding-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .finding-source {
+      font-weight: 600;
+      color: #1d1d1f;
+    }
+    .finding-label {
+      color: #86868b;
+      font-size: 9pt;
+      font-weight: 500;
+      margin-top: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .finding-text {
+      background: #f5f5f7;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 9.5pt;
+      margin-top: 4px;
+      line-height: 1.5;
+    }
+
+    /* ── Framework bar chart (CSS only) ───────────────────────────── */
+    .bar-row {
+      display: flex;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .bar-label {
+      width: 180px;
+      font-size: 9.5pt;
+      font-weight: 500;
+      flex-shrink: 0;
+    }
+    .bar-track {
+      flex: 1;
+      height: 18px;
+      background: #f5f5f7;
+      border-radius: 9px;
+      overflow: hidden;
+      display: flex;
+    }
+    .bar-seg { height: 100%; }
+    .bar-seg-compliant           { background: #30d158; }
+    .bar-seg-partially_compliant { background: #ff9f0a; }
+    .bar-seg-non_compliant       { background: #ff3b30; }
+    .bar-seg-na                  { background: #d2d2d7; }
+    .bar-score {
+      width: 60px;
+      text-align: right;
+      font-weight: 700;
+      font-size: 10pt;
+      flex-shrink: 0;
+      padding-left: 8px;
+    }
+
+    /* ── Footer ───────────────────────────────────────────────────── */
+    .footer {
+      text-align: center;
+      color: #86868b;
+      font-size: 8pt;
+      margin-top: 40px;
+      padding-top: 16px;
+      border-top: 1px solid #e5e5e7;
+    }
+
+    @page {
+      size: A4;
+      margin: 20mm 15mm;
+    }
+    @media print {
+      .cover { min-height: auto; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     COVER PAGE
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="cover">
+  <div class="logo">NFRA Compliance Engine</div>
+  <h1>Compliance Validation Report</h1>
+  <p class="subtitle">{{ document_name }}</p>
+
+  <table class="meta-table">
+    {% if company_name %}
+    <tr><td>Company</td><td>{{ company_name }}</td></tr>
+    {% endif %}
+    {% if fiscal_year %}
+    <tr><td>Fiscal Year</td><td>{{ fiscal_year }}</td></tr>
+    {% endif %}
+    <tr><td>Frameworks</td><td>{{ frameworks_tested | join(', ') }}</td></tr>
+    <tr><td>Date Generated</td><td>{{ generated_date }}</td></tr>
+    <tr><td>Report ID</td><td>{{ report_id }}</td></tr>
+  </table>
+
+  {% set score = overall_compliance_score %}
+  <div class="score-badge {% if score >= 80 %}score-green{% elif score >= 50 %}score-amber{% elif score > 0 %}score-red{% else %}score-grey{% endif %}">
+    {{ "%.1f" | format(score) }}% Compliant
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     EXECUTIVE SUMMARY
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="page">
+  <h2>Executive Summary</h2>
+
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="number">{{ total_rules_checked }}</div>
+      <div class="label">Rules Checked</div>
+    </div>
+    <div class="stat-card">
+      <div class="number" style="color:#30d158">{{ compliant_count }}</div>
+      <div class="label">Compliant</div>
+    </div>
+    <div class="stat-card">
+      <div class="number" style="color:#ff3b30">{{ non_compliant_count }}</div>
+      <div class="label">Non-Compliant</div>
+    </div>
+    <div class="stat-card">
+      <div class="number" style="color:#ff9f0a">{{ partially_compliant_count }}</div>
+      <div class="label">Partial</div>
+    </div>
+    <div class="stat-card">
+      <div class="number" style="color:#86868b">{{ not_applicable_count }}</div>
+      <div class="label">N/A</div>
+    </div>
+  </div>
+
+  <p>{{ summary }}</p>
+
+  <!-- Framework-level bar chart -->
+  {% if framework_stats %}
+  <h3>Score by Framework</h3>
+  {% for fw in framework_stats %}
+  <div class="bar-row">
+    <div class="bar-label">{{ fw.name }}</div>
+    <div class="bar-track">
+      {% if fw.total > 0 %}
+      <div class="bar-seg bar-seg-compliant" style="width:{{ (fw.compliant / fw.total * 100) | round(1) }}%"></div>
+      <div class="bar-seg bar-seg-partially_compliant" style="width:{{ (fw.partially_compliant / fw.total * 100) | round(1) }}%"></div>
+      <div class="bar-seg bar-seg-non_compliant" style="width:{{ (fw.non_compliant / fw.total * 100) | round(1) }}%"></div>
+      <div class="bar-seg bar-seg-na" style="width:{{ (fw.not_applicable / fw.total * 100) | round(1) }}%"></div>
+      {% endif %}
+    </div>
+    <div class="bar-score">{{ fw.score }}%</div>
+  </div>
+  {% endfor %}
+  {% endif %}
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     COMPLIANCE MATRIX
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="page">
+  <h2>Compliance Matrix</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Rule Source</th>
+        <th>Framework</th>
+        <th>Status</th>
+        <th>Confidence</th>
+        <th>Evidence Location</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in results %}
+      <tr>
+        <td>{{ r.rule_source }}</td>
+        <td>{{ r.framework }}</td>
+        <td><span class="badge badge-{{ r.status }}">{{ status_labels.get(r.status, r.status) }}</span></td>
+        <td>{{ "%.0f" | format(r.confidence * 100) }}%</td>
+        <td>{{ r.evidence_location }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     DETAILED FINDINGS — Non-Compliant
+     ═══════════════════════════════════════════════════════════════════ -->
+{% if non_compliant_results %}
+<div class="page">
+  <h2>Non-Compliant Findings</h2>
+  {% for r in non_compliant_results %}
+  <div class="finding">
+    <div class="finding-header">
+      <span class="finding-source">{{ r.rule_source }}</span>
+      <span class="badge badge-non_compliant">Non-Compliant</span>
+    </div>
+
+    <div class="finding-label">Regulatory Requirement</div>
+    <div class="finding-text">{{ r.rule_text }}</div>
+
+    <div class="finding-label">Evidence from Document</div>
+    <div class="finding-text">{{ r.evidence }}</div>
+
+    <div class="finding-label">Explanation</div>
+    <p>{{ r.explanation }}</p>
+
+    {% if r.recommendations %}
+    <div class="finding-label">Recommendations</div>
+    <p>{{ r.recommendations }}</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     DETAILED FINDINGS — Partially Compliant
+     ═══════════════════════════════════════════════════════════════════ -->
+{% if partial_results %}
+<div class="page">
+  <h2>Partially Compliant Findings</h2>
+  {% for r in partial_results %}
+  <div class="finding">
+    <div class="finding-header">
+      <span class="finding-source">{{ r.rule_source }}</span>
+      <span class="badge badge-partially_compliant">Partially Compliant</span>
+    </div>
+
+    <div class="finding-label">Regulatory Requirement</div>
+    <div class="finding-text">{{ r.rule_text }}</div>
+
+    <div class="finding-label">Evidence from Document</div>
+    <div class="finding-text">{{ r.evidence }}</div>
+
+    <div class="finding-label">Explanation</div>
+    <p>{{ r.explanation }}</p>
+
+    {% if r.recommendations %}
+    <div class="finding-label">Recommendations</div>
+    <p>{{ r.recommendations }}</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     APPENDIX
+     ═══════════════════════════════════════════════════════════════════ -->
+<div class="page">
+  <h2>Appendix</h2>
+
+  <h3>Document Under Review</h3>
+  <table>
+    <tbody>
+      <tr><td style="font-weight:600;width:200px">Document</td><td>{{ document_name }}</td></tr>
+      <tr><td style="font-weight:600">Document ID</td><td>{{ document_id }}</td></tr>
+      {% if company_name %}<tr><td style="font-weight:600">Company</td><td>{{ company_name }}</td></tr>{% endif %}
+      {% if fiscal_year %}<tr><td style="font-weight:600">Fiscal Year</td><td>{{ fiscal_year }}</td></tr>{% endif %}
+    </tbody>
+  </table>
+
+  <h3>Frameworks Tested</h3>
+  <ul>
+    {% for fw in frameworks_tested %}
+    <li>{{ fw }}</li>
+    {% endfor %}
+  </ul>
+
+  <h3>Report Metadata</h3>
+  <table>
+    <tbody>
+      <tr><td style="font-weight:600;width:200px">Report ID</td><td>{{ report_id }}</td></tr>
+      <tr><td style="font-weight:600">Generated</td><td>{{ generated_date }} at {{ generated_time }}</td></tr>
+      <tr><td style="font-weight:600">Processing Time</td><td>{{ processing_time }}s</td></tr>
+      <tr><td style="font-weight:600">Total Rules</td><td>{{ total_rules_checked }}</td></tr>
+    </tbody>
+  </table>
+
+  <div class="footer">
+    Generated by NFRA Compliance Engine &middot; IndiaAI Challenge &middot; {{ generated_date }}
+  </div>
+</div>
+
+</body>
+</html>

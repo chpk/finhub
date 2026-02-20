@@ -1,0 +1,46 @@
+# ── Environment files (contain secrets) ──
+.env
+backend/.env
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.so
+
+# ── ChromaDB persistent storage (generated at runtime) ──
+chroma_db/
+backend/chroma_db/
+
+# ── Uploaded user documents (runtime data) ──
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# ── Node.js ──
+node_modules/
+frontend/.next/
+frontend/out/
+
+# ── IDE ──
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+
+# ── Logs ──
+*.log
+
+# ── Test / Coverage ──
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

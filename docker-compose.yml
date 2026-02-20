@@ -1,0 +1,40 @@
+version: "3.9"
+
+services:
+  # ── FastAPI Backend ───────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: nfra-backend
+    ports:
+      - "8888:8888"
+    env_file:
+      - ./backend/.env
+    environment:
+      - BACKEND_HOST=0.0.0.0
+      - BACKEND_PORT=8888
+    volumes:
+      - ./backend/uploads:/app/uploads
+      - chroma_data:/app/chroma_db
+      - ./backend/data:/app/data
+    restart: unless-stopped
+
+  # ── Next.js Frontend ──────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://backend:8888
+    container_name: nfra-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://backend:8888
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  chroma_data:
