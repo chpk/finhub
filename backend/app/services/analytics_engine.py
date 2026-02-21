@@ -218,8 +218,15 @@ class AnalyticsEngine:
     api_key:
         OpenAI API key.
     model:
-        LLM model name (default gpt-4o).
+        LLM model name.
     """
+
+    _MAX_TABLES = 15
+    _MAX_SUMMARY_CHARS = 6000
+    _MAX_TABLE_PREVIEW_ROWS = 2
+    _MAX_COLS_SHOWN = 8
+    _RATE_LIMIT_RETRIES = 3
+    _RATE_LIMIT_BACKOFF = 5  # seconds, doubles each retry
 
     def __init__(
         self,
@@ -227,7 +234,7 @@ class AnalyticsEngine:
         embedding_service: Any,
         mongo_service: Any,
         api_key: str = "",
-        model: str = "gpt-4.1",
+        model: str = "gpt-4.1-mini",
     ) -> None:
         self._vs = vector_store
         self._emb = embedding_service
@@ -250,14 +257,12 @@ class AnalyticsEngine:
         """Run the full agentic analysis loop.
 
         Returns a dict with keys:
-        - ``answer``: str — the final natural-language answer
-        - ``charts``: list[str] — base-64 PNG images
-        - ``metrics``: dict — extracted metrics
+        - ``answer``: str -- the final natural-language answer
+        - ``charts``: list[str] -- base-64 PNG images
+        - ``metrics``: dict -- extracted metrics
         - ``tables_loaded``: int
         """
         loaded_tables = await self._load_tables(document_ids)
-
-        state = AnalyticsState(tables=loaded_tables)
 
         table_summary = self._summarise_tables(loaded_tables)
 
@@ -266,6 +271,8 @@ class AnalyticsEngine:
             f"Table summaries:\n{table_summary}\n\n"
             f"User question: {question}"
         )
+
+        llm_with_tools = self._llm.bind(tools=TOOL_DEFINITIONS)
 
         messages: list[BaseMessage] = [
             SystemMessage(content=_SYSTEM_PROMPT),
@@ -276,9 +283,9 @@ class AnalyticsEngine:
         metrics: dict[str, Any] = {}
 
         for iteration in range(_MAX_TOOL_ITERATIONS):
-            response: AIMessage = await self._llm.bind(
-                tools=TOOL_DEFINITIONS,
-            ).ainvoke(messages)
+            response: AIMessage = await self._invoke_with_retry(
+                llm_with_tools, messages
+            )
 
             messages.append(response)
 
@@ -302,17 +309,41 @@ class AnalyticsEngine:
                 except Exception as exc:
                     result = f"Tool error: {exc}"
 
+                tool_content = str(result)
+                if len(tool_content) > 4000:
+                    tool_content = tool_content[:4000] + "\n... (truncated)"
                 messages.append(
-                    ToolMessage(content=str(result), tool_call_id=tool_id)
+                    ToolMessage(content=tool_content, tool_call_id=tool_id)
                 )
 
-        final_response = await self._llm.ainvoke(messages)
+        final_response = await self._invoke_with_retry(self._llm, messages)
         return {
             "answer": final_response.content or "",
             "charts": charts,
             "metrics": metrics,
             "tables_loaded": len(loaded_tables),
         }
+
+    async def _invoke_with_retry(
+        self, llm: Any, messages: list[BaseMessage]
+    ) -> AIMessage:
+        """Invoke the LLM with exponential-backoff retry on rate-limit errors."""
+        import openai as _openai
+
+        backoff = self._RATE_LIMIT_BACKOFF
+        for attempt in range(self._RATE_LIMIT_RETRIES):
+            try:
+                return await llm.ainvoke(messages)
+            except _openai.RateLimitError:
+                if attempt == self._RATE_LIMIT_RETRIES - 1:
+                    raise
+                logger.warning(
+                    "Rate limit hit (attempt %d/%d), backing off %ds",
+                    attempt + 1, self._RATE_LIMIT_RETRIES, backoff,
+                )
+                await asyncio.sleep(backoff)
+                backoff *= 2
+        raise RuntimeError("Unreachable")
 
     async def get_document_tables(
         self, document_id: str
@@ -651,7 +682,7 @@ class AnalyticsEngine:
         else:
             query["tables_count"] = {"$gt": 0}
 
-        docs = await self._mongo.find_many("documents", query, limit=50)
+        docs = await self._mongo.find_many("documents", query, limit=10)
 
         all_tables: list[dict[str, Any]] = []
         for doc in docs:
@@ -721,26 +752,55 @@ class AnalyticsEngine:
                             "col_count": len(df.columns),
                         })
 
-        return all_tables
+        return all_tables[: self._MAX_TABLES]
 
     def _summarise_tables(self, tables: list[dict[str, Any]]) -> str:
-        """Create a text summary of loaded tables for the LLM context."""
+        """Create a compact text summary of loaded tables for the LLM context.
+
+        Stays within ``_MAX_SUMMARY_CHARS`` to avoid blowing the token budget.
+        """
         if not tables:
             return "No tables loaded."
 
+        show = tables[: self._MAX_TABLES]
+        omitted = len(tables) - len(show)
+
         lines: list[str] = []
-        for i, t in enumerate(tables):
+        total_chars = 0
+        for i, t in enumerate(show):
             df: pd.DataFrame = t.get("dataframe", pd.DataFrame())
             cols = list(df.columns) if not df.empty else t.get("column_headers", [])
-            lines.append(
+            col_display = cols[: self._MAX_COLS_SHOWN]
+            if len(cols) > self._MAX_COLS_SHOWN:
+                col_display.append(f"... +{len(cols) - self._MAX_COLS_SHOWN} more")
+
+            header = (
                 f"Table {i}: source={t['source_file']}, "
                 f"type={t.get('financial_statement_type', 'unknown')}, "
                 f"page={t.get('page_number', '?')}, "
                 f"rows={t.get('row_count', 0)}, "
-                f"columns={cols[:10]}"
+                f"columns={col_display}"
             )
-            if not df.empty:
-                lines.append(f"  Preview:\n{df.head(3).to_string()}")
+            lines.append(header)
+            total_chars += len(header)
+
+            if not df.empty and total_chars < self._MAX_SUMMARY_CHARS:
+                preview = df.head(self._MAX_TABLE_PREVIEW_ROWS).to_string(
+                    max_cols=self._MAX_COLS_SHOWN
+                )
+                if total_chars + len(preview) < self._MAX_SUMMARY_CHARS:
+                    lines.append(f"  Preview:\n{preview}")
+                    total_chars += len(preview)
+
+            if total_chars >= self._MAX_SUMMARY_CHARS:
+                lines.append(f"... (remaining tables omitted for brevity)")
+                break
+
+        if omitted > 0:
+            lines.append(
+                f"\n({omitted} additional table(s) loaded but not shown in summary)"
+            )
+
         return "\n".join(lines)
 
     def _find_metric_in_tables(
