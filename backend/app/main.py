@@ -5,6 +5,7 @@ import logging
 import time as _time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,6 +34,82 @@ from app.services.vector_store import VectorStoreService
 from app.pipelines.compliance_pipeline import CompliancePipeline
 from app.pipelines.ingest_pipeline import IngestPipeline
 from app.utils.chunking import ComplianceChunker
+
+
+async def _maybe_auto_index(
+    settings: Any,
+    vector_store: VectorStoreService,
+    embedding_service: EmbeddingService,
+    document_processor: DocumentProcessor,
+) -> None:
+    """Check if ChromaDB regulatory collections are empty.
+
+    If ``AUTO_INDEX_ON_STARTUP=true``, automatically index all compliance
+    rule PDFs found in the compliance-rules directory.  Otherwise just
+    log a warning so the operator knows indexing is needed.
+    """
+    from pathlib import Path as _Path
+
+    stats = vector_store.get_all_stats()
+    reg_count = sum(s["count"] for s in stats if s["name"] in (
+        "regulatory_frameworks", "disclosure_checklists",
+    ))
+
+    if reg_count > 0:
+        logger.info(
+            "ChromaDB regulatory collections contain %d chunks — skipping indexing.",
+            reg_count,
+        )
+        return
+
+    rules_dir = _Path(settings.COMPLIANCE_RULES_DIR) if settings.COMPLIANCE_RULES_DIR else None
+    if rules_dir is None or not rules_dir.is_dir():
+        for candidate in (
+            _Path("data/compliance_rules"),
+            _Path(__file__).resolve().parent.parent / "data" / "compliance_rules",
+        ):
+            if candidate.is_dir():
+                rules_dir = candidate
+                break
+
+    has_pdfs = rules_dir is not None and rules_dir.is_dir() and any(rules_dir.rglob("*.pdf"))
+
+    if not settings.AUTO_INDEX_ON_STARTUP:
+        if has_pdfs:
+            logger.warning(
+                "ChromaDB regulatory collections are EMPTY. "
+                "Compliance rules found at %s but AUTO_INDEX_ON_STARTUP is not enabled. "
+                "Run manually:  python -m scripts.index_compliance_rules  "
+                "Or set AUTO_INDEX_ON_STARTUP=true in .env to index on next restart.",
+                rules_dir,
+            )
+        else:
+            logger.warning(
+                "ChromaDB regulatory collections are EMPTY and no compliance "
+                "rules PDFs found. Place PDFs in data/compliance_rules/ and run "
+                "python -m scripts.index_compliance_rules"
+            )
+        return
+
+    if not has_pdfs:
+        logger.warning(
+            "AUTO_INDEX_ON_STARTUP is true but no compliance PDFs found at %s",
+            rules_dir,
+        )
+        return
+
+    logger.info(
+        "AUTO_INDEX_ON_STARTUP enabled — indexing compliance rules from %s ...",
+        rules_dir,
+    )
+    try:
+        from scripts.index_compliance_rules import index_all
+        import os
+        os.environ.setdefault("COMPLIANCE_RULES_DIR", str(rules_dir))
+        await index_all()
+        logger.info("Auto-indexing completed successfully.")
+    except Exception:
+        logger.exception("Auto-indexing failed. You can retry manually.")
 
 
 @asynccontextmanager
@@ -136,6 +213,9 @@ async def lifespan(app: FastAPI):
         api_key=settings.OPENAI_API_KEY,
         model=settings.LLM_MODEL,
     )
+
+    # ── Auto-index compliance rules if collections are empty ────────
+    await _maybe_auto_index(settings, vector_store, embedding_service, document_processor)
 
     # Start background keep-alive ping to prevent Atlas connection going cold
     async def _keepalive():

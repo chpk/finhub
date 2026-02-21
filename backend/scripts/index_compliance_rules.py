@@ -44,12 +44,27 @@ FOLDER_MAP: dict[str, dict[str, str]] = {
     "SEBI_LODR":             {"framework": "SEBI_LODR",             "collection": "regulatory_frameworks"},
 }
 
+def _resolve_default_rules_dir() -> Path:
+    """Find the compliance rules directory relative to the backend root.
+
+    Checks (in order):
+    1. ``./data/compliance_rules``  (standard location, works in Docker)
+    2. ``../NFRA_Challenge_Data/01_Compliance_Rules``  (repo-level data)
+    """
+    candidates = [
+        Path("data/compliance_rules"),
+        Path(__file__).resolve().parent.parent / "data" / "compliance_rules",
+        Path(__file__).resolve().parent.parent.parent / "NFRA_Challenge_Data" / "01_Compliance_Rules",
+    ]
+    for p in candidates:
+        if p.is_dir():
+            return p
+    return candidates[0]
+
+
 COMPLIANCE_RULES_DIR = Path(
-    os.environ.get(
-        "COMPLIANCE_RULES_DIR",
-        "/home/motormaven/Desktop/financeAIDE/NFRA_Challenge_Data/01_Compliance_Rules",
-    )
-)
+    os.environ.get("COMPLIANCE_RULES_DIR", "")
+) if os.environ.get("COMPLIANCE_RULES_DIR") else _resolve_default_rules_dir()
 
 # Embedding batch size (tokens budget friendly)
 EMBED_BATCH = 50
