@@ -36,80 +36,97 @@ from app.pipelines.ingest_pipeline import IngestPipeline
 from app.utils.chunking import ComplianceChunker
 
 
-async def _maybe_auto_index(
+def _find_compliance_rules_dir(settings: Any) -> Path | None:
+    """Locate the compliance rules directory, checking multiple candidates."""
+    if settings.COMPLIANCE_RULES_DIR:
+        p = Path(settings.COMPLIANCE_RULES_DIR)
+        if p.is_dir():
+            return p
+
+    for candidate in (
+        Path("data/compliance_rules"),
+        Path(__file__).resolve().parent.parent / "data" / "compliance_rules",
+        Path(__file__).resolve().parent.parent.parent / "NFRA_Challenge_Data" / "01_Compliance_Rules",
+    ):
+        if candidate.is_dir() and any(candidate.rglob("*.pdf")):
+            return candidate
+    return None
+
+
+async def _auto_index_compliance_rules(
     settings: Any,
     vector_store: VectorStoreService,
     embedding_service: EmbeddingService,
     document_processor: DocumentProcessor,
 ) -> None:
-    """Check if ChromaDB regulatory collections are empty.
+    """Index compliance rules into ChromaDB if collections are empty.
 
-    If ``AUTO_INDEX_ON_STARTUP=true``, automatically index all compliance
-    rule PDFs found in the compliance-rules directory.  Otherwise just
-    log a warning so the operator knows indexing is needed.
+    Called during startup.  If the regulatory collections already contain
+    data the function returns immediately.  Otherwise it runs the full
+    indexing pipeline (extract, chunk, embed, store) so the application
+    is ready to serve compliance queries on first boot.
     """
-    from pathlib import Path as _Path
-
     stats = vector_store.get_all_stats()
-    reg_count = sum(s["count"] for s in stats if s["name"] in (
-        "regulatory_frameworks", "disclosure_checklists",
-    ))
+    reg_count = sum(
+        s["count"] for s in stats
+        if s["name"] in ("regulatory_frameworks", "disclosure_checklists")
+    )
 
     if reg_count > 0:
         logger.info(
-            "ChromaDB regulatory collections contain %d chunks — skipping indexing.",
+            "ChromaDB regulatory collections already contain %d chunks — "
+            "skipping indexing.",
             reg_count,
         )
         return
 
-    rules_dir = _Path(settings.COMPLIANCE_RULES_DIR) if settings.COMPLIANCE_RULES_DIR else None
-    if rules_dir is None or not rules_dir.is_dir():
-        for candidate in (
-            _Path("data/compliance_rules"),
-            _Path(__file__).resolve().parent.parent / "data" / "compliance_rules",
-        ):
-            if candidate.is_dir():
-                rules_dir = candidate
-                break
+    rules_dir = _find_compliance_rules_dir(settings)
 
-    has_pdfs = rules_dir is not None and rules_dir.is_dir() and any(rules_dir.rglob("*.pdf"))
-
-    if not settings.AUTO_INDEX_ON_STARTUP:
-        if has_pdfs:
-            logger.warning(
-                "ChromaDB regulatory collections are EMPTY. "
-                "Compliance rules found at %s but AUTO_INDEX_ON_STARTUP is not enabled. "
-                "Run manually:  python -m scripts.index_compliance_rules  "
-                "Or set AUTO_INDEX_ON_STARTUP=true in .env to index on next restart.",
-                rules_dir,
-            )
-        else:
-            logger.warning(
-                "ChromaDB regulatory collections are EMPTY and no compliance "
-                "rules PDFs found. Place PDFs in data/compliance_rules/ and run "
-                "python -m scripts.index_compliance_rules"
-            )
+    if rules_dir is None:
+        logger.warning(
+            "ChromaDB regulatory collections are EMPTY and no compliance "
+            "rule PDFs were found.  Place PDFs in data/compliance_rules/ "
+            "and restart, or run:  python -m scripts.index_compliance_rules"
+        )
         return
 
-    if not has_pdfs:
+    if not settings.AUTO_INDEX_ON_STARTUP:
         logger.warning(
-            "AUTO_INDEX_ON_STARTUP is true but no compliance PDFs found at %s",
+            "ChromaDB regulatory collections are EMPTY.  Compliance rules "
+            "found at %s but AUTO_INDEX_ON_STARTUP=false.  Set it to true "
+            "in .env or run:  python -m scripts.index_compliance_rules",
             rules_dir,
         )
         return
 
     logger.info(
-        "AUTO_INDEX_ON_STARTUP enabled — indexing compliance rules from %s ...",
+        "========================================================\n"
+        "  FIRST-RUN INDEXING: Processing compliance rules from\n"
+        "  %s\n"
+        "  This is a one-time operation and may take several minutes.\n"
+        "========================================================",
         rules_dir,
     )
+
+    import os
+    os.environ["COMPLIANCE_RULES_DIR"] = str(rules_dir)
+
     try:
         from scripts.index_compliance_rules import index_all
-        import os
-        os.environ.setdefault("COMPLIANCE_RULES_DIR", str(rules_dir))
         await index_all()
-        logger.info("Auto-indexing completed successfully.")
+        new_stats = vector_store.get_all_stats()
+        new_count = sum(s["count"] for s in new_stats)
+        logger.info(
+            "First-run indexing COMPLETE — %d total chunks across %d collections.",
+            new_count,
+            len(new_stats),
+        )
     except Exception:
-        logger.exception("Auto-indexing failed. You can retry manually.")
+        logger.exception(
+            "First-run indexing FAILED.  The application will start but "
+            "compliance features will not work until indexing succeeds.  "
+            "Retry with:  python -m scripts.index_compliance_rules"
+        )
 
 
 @asynccontextmanager
@@ -215,7 +232,7 @@ async def lifespan(app: FastAPI):
     )
 
     # ── Auto-index compliance rules if collections are empty ────────
-    await _maybe_auto_index(settings, vector_store, embedding_service, document_processor)
+    await _auto_index_compliance_rules(settings, vector_store, embedding_service, document_processor)
 
     # Start background keep-alive ping to prevent Atlas connection going cold
     async def _keepalive():

@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     LLM_MODEL: str = "gpt-4.1"
     BACKEND_HOST: str = "0.0.0.0"
     BACKEND_PORT: int = 8888
-    AUTO_INDEX_ON_STARTUP: bool = False
+    AUTO_INDEX_ON_STARTUP: bool = True
     COMPLIANCE_RULES_DIR: str = ""
 
 

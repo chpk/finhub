@@ -14,11 +14,12 @@ services:
     environment:
       - BACKEND_HOST=0.0.0.0
       - BACKEND_PORT=8888
+      - AUTO_INDEX_ON_STARTUP=true
+      - CHROMA_PERSIST_DIR=./chroma_db
     volumes:
       - ./backend/uploads:/app/uploads
       - chroma_data:/app/chroma_db
       - ./backend/data:/app/data
-      - ./NFRA_Challenge_Data/01_Compliance_Rules:/app/data/compliance_rules:ro
     restart: unless-stopped
 
   # ── Next.js Frontend ──────────────────────────

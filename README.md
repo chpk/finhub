@@ -462,29 +462,25 @@ BACKEND_HOST=0.0.0.0
 BACKEND_PORT=8888
 ```
 
-### 4. Index Compliance Rules (One-Time)
+### 4. Compliance Rules Indexing (Automatic on First Run)
 
-Place regulatory PDFs in `backend/data/compliance_rules/` following the directory structure:
+The compliance rule PDFs are included in the repository under `backend/data/compliance_rules/`. On first startup, the backend **automatically detects** that the ChromaDB vector database is empty and indexes all 62 regulatory PDFs. This process:
 
-```
-backend/data/compliance_rules/
-+-- IndAS_Standards/
-+-- Schedule_III/
-+-- SEBI_LODR/
-+-- RBI_Norms/
-+-- ESG_BRSR/
-+-- Auditing_Standards/
-+-- Disclosure_Checklists/
-```
+1. Sends each PDF to the OCR extraction API for text and table extraction.
+2. Chunks the extracted content using the compliance-aware chunker.
+3. Generates embeddings via OpenAI `text-embedding-3-large`.
+4. Stores the embeddings in ChromaDB.
 
-Alternatively, point the indexing script at an existing data directory:
+**This is fully automatic** -- no manual step is required. The first startup takes several minutes while indexing runs. Subsequent starts detect that data already exists and skip indexing entirely.
+
+The behaviour is controlled by the `AUTO_INDEX_ON_STARTUP` setting in `.env` (default: `true`). If you prefer to index manually:
 
 ```bash
 cd backend
-python -m app.scripts.index_compliance_rules --data-dir /path/to/compliance_rules
+AUTO_INDEX_ON_STARTUP=false python -m scripts.index_compliance_rules
 ```
 
-This processes all PDFs, chunks them, generates embeddings, and indexes them into ChromaDB. This step takes time depending on the volume of documents and API rate limits.
+The indexed data persists in `backend/chroma_db/` (or the Docker `chroma_data` volume). Deleting this directory triggers a fresh re-index on next startup.
 
 ### 5. Frontend Setup
 
@@ -517,12 +513,14 @@ uvicorn app.main:app --host 0.0.0.0 --port 8888 --reload
 ```
 
 The backend will:
-- Connect to MongoDB Atlas.
-- Initialise ChromaDB with persistent storage.
-- Create database indexes for optimised queries.
-- Start all service components (document processor, embedding service, LLM service, compliance engine, analytics engine).
-- Serve the API at `http://localhost:8888`.
-- Health check available at `http://localhost:8888/api/health`.
+
+1. Connect to MongoDB Atlas and warm up the connection pool.
+2. Initialise ChromaDB with persistent storage.
+3. Create database indexes for optimised queries.
+4. **Check if compliance rules are indexed** -- if ChromaDB is empty, automatically process and index all 62 regulatory PDFs from `data/compliance_rules/`. This first-run indexing takes several minutes; subsequent starts skip it.
+5. Start all service components (document processor, embedding service, LLM service, compliance engine, analytics engine).
+6. Serve the API at `http://localhost:8888`.
+7. Health check available at `http://localhost:8888/api/health`.
 
 ### Start the Frontend
 
@@ -559,11 +557,20 @@ cd nfra-compliance-engine
 # Build and start all services
 docker compose up --build -d
 
-# View logs
-docker compose logs -f
+# View logs (watch the first-run indexing progress)
+docker compose logs -f backend
 
 # Stop all services
 docker compose down
+```
+
+On **first launch**, the backend container will automatically index all 62 compliance rule PDFs into ChromaDB before starting the API server. Monitor progress with `docker compose logs -f backend`. This one-time process takes several minutes. Subsequent container restarts detect the existing index and start immediately.
+
+To force a re-index (e.g. after updating compliance rules), delete the ChromaDB volume:
+
+```bash
+docker compose down -v   # removes named volumes
+docker compose up -d     # rebuilds index on next start
 ```
 
 ### docker-compose.yml Services
@@ -576,25 +583,18 @@ docker compose down
 ### Persistent Volumes
 
 - `./backend/uploads` -- Uploaded document files.
-- `chroma_data` (Docker volume) -- ChromaDB vector database.
-- `./backend/data` -- Compliance rules PDFs.
+- `chroma_data` (Docker volume) -- ChromaDB vector database. Persists across restarts. Delete to trigger re-indexing.
+- `./backend/data` -- Compliance rules PDFs (also baked into the Docker image).
 
-### Backend Dockerfile
+### Backend Docker Image
 
-```dockerfile
-FROM python:3.12-slim
-WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential libpango-1.0-0 libpangocairo-1.0-0 \
-    libgdk-pixbuf2.0-0 libffi-dev libcairo2 \
-    && rm -rf /var/lib/apt/lists/*
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY . .
-RUN mkdir -p uploads chroma_db data/compliance_rules
-EXPOSE 8888
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8888"]
-```
+The backend image includes an entrypoint script (`entrypoint.sh`) that:
+
+1. Checks whether ChromaDB contains indexed data.
+2. If empty, runs the compliance rules indexing script as a pre-flight step.
+3. Then starts the uvicorn server.
+
+The compliance rule PDFs are baked into the image under `data/compliance_rules/`, so the container is fully self-contained and does not require external file mounts to function.
 
 ### Frontend Dockerfile
 
