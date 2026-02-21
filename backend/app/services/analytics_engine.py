@@ -276,7 +276,7 @@ class AnalyticsEngine:
         metrics: dict[str, Any] = {}
 
         for iteration in range(_MAX_TOOL_ITERATIONS):
-            response: AIMessage = await self._llm.abind(
+            response: AIMessage = await self._llm.bind(
                 tools=TOOL_DEFINITIONS,
             ).ainvoke(messages)
 
@@ -671,10 +671,8 @@ class AnalyticsEngine:
 
                 for col in df.columns:
                     try:
-                        df[col] = pd.to_numeric(
-                            df[col].astype(str).str.replace(",", "").str.replace("₹", "").str.replace("$", "").str.strip(),
-                            errors="ignore",
-                        )
+                        cleaned = df[col].astype(str).str.replace(",", "").str.replace("₹", "").str.replace("$", "").str.strip()
+                        df[col] = pd.to_numeric(cleaned, errors="coerce").fillna(df[col])
                     except Exception:
                         pass
 
@@ -705,10 +703,8 @@ class AnalyticsEngine:
                     if not df.empty:
                         for col in df.columns:
                             try:
-                                df[col] = pd.to_numeric(
-                                    df[col].astype(str).str.replace(",", "").str.replace("₹", "").str.replace("$", "").str.strip(),
-                                    errors="ignore",
-                                )
+                                cleaned = df[col].astype(str).str.replace(",", "").str.replace("₹", "").str.replace("$", "").str.strip()
+                                df[col] = pd.to_numeric(cleaned, errors="coerce").fillna(df[col])
                             except Exception:
                                 pass
 

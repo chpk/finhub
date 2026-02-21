@@ -1,0 +1,20 @@
+NFRA Challenge — Files That Need Manual Download
+=======================================================
+
+Open each URL in your browser and save the PDF:
+
+File: ICAI_Guidance_Schedule_III_General.pdf
+URL:  https://kb.icai.org/pdfs/PDFFile5b27859a90bfc7.83429474.pdf
+
+File: SA_700_Revised_Forming_Opinion.pdf
+URL:  https://kb.icai.org/pdfs/PDFFile5b3b47cc680bc3.58124333.pdf
+
+File: Overview_Standards_on_Auditing.pdf
+URL:  https://www.puneicai.org/all-pages/download/813_18f51e812da3012ad6a21174c5c54f02
+
+File: Infosys_Annual_Report_2024_25.pdf
+URL:  https://www.infosys.com/investors/reports-filings/annual-report/annual/documents/infosys-ar-25.pdf
+
+File: Infosys_Standalone_Financials_FY24.pdf
+URL:  https://www.infosys.com/investors/reports-filings/quarterly-results/2023-2024/q4/documents/standalone/sa-fy24-annual-finstatement.pdf
+
