@@ -63,6 +63,23 @@ export default function ChatPage() {
 
   const handleNewChat = () => {
     setCurrentSession(null);
+    setSelectedDocIds([]);
+    setChatMode("auto");
+  };
+
+  const handleSessionChange = (sessionId: string) => {
+    setCurrentSession(sessionId);
+    getChatSessions()
+      .then((data) => {
+        const mapped = data.map((s) => ({
+          session_id: s.session_id || "",
+          title: s.title || "Chat Session",
+          created_at: s.created_at,
+          message_count: s.messages?.length,
+        }));
+        setSessions(mapped);
+      })
+      .catch(() => {});
   };
 
   const handleDeleteSession = async (id: string) => {
@@ -295,7 +312,7 @@ export default function ChatPage() {
             mode={chatMode}
             documentIds={selectedDocIds}
             sessionId={currentSession}
-            onSessionChange={setCurrentSession}
+            onSessionChange={handleSessionChange}
           />
         </div>
       </div>

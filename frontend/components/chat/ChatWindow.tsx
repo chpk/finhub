@@ -35,37 +35,74 @@ const SUGGESTED_QUESTIONS = [
   "Summarise the audit report findings",
 ];
 
+const WELCOME_MESSAGE: LocalMessage = {
+  id: "welcome",
+  role: "assistant",
+  content:
+    "Hello! I'm the enhanced NFRA Insight Bot. I can help you with:\n\n" +
+    "- **Compliance Matrix**: Walk through regulatory requirements step-by-step\n" +
+    "- **Analytics**: Data-driven answers referencing financial metrics\n" +
+    "- **Comparison**: Compare companies and compliance scores\n" +
+    "- **General Q&A**: Ask about Ind AS, SEBI, RBI, BRSR, or any regulation\n\n" +
+    "Select documents in the sidebar to scope my answers, or ask freely!",
+};
+
 export function ChatWindow({
   mode = "auto",
   documentIds = [],
   sessionId: externalSessionId,
   onSessionChange,
 }: ChatWindowProps) {
-  const [messages, setMessages] = useState<LocalMessage[]>([
-    {
-      id: "welcome",
-      role: "assistant",
-      content:
-        "Hello! I'm the enhanced NFRA Insight Bot. I can help you with:\n\n" +
-        "- **Compliance Matrix**: Walk through regulatory requirements step-by-step\n" +
-        "- **Analytics**: Data-driven answers referencing financial metrics\n" +
-        "- **Comparison**: Compare companies and compliance scores\n" +
-        "- **General Q&A**: Ask about Ind AS, SEBI, RBI, BRSR, or any regulation\n\n" +
-        "Select documents in the sidebar to scope my answers, or ask freely!",
-    },
-  ]);
+  const [messages, setMessages] = useState<LocalMessage[]>([WELCOME_MESSAGE]);
   const [internalSessionId, setInternalSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
+  const prevSessionRef = useRef<string | null | undefined>(undefined);
 
-  const activeSessionId = externalSessionId || internalSessionId;
+  const activeSessionId = externalSessionId ?? internalSessionId;
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages]);
+
+  useEffect(() => {
+    if (prevSessionRef.current === externalSessionId) return;
+    prevSessionRef.current = externalSessionId;
+
+    if (externalSessionId === null) {
+      setMessages([WELCOME_MESSAGE]);
+      setInternalSessionId(null);
+      return;
+    }
+
+    if (externalSessionId) {
+      setLoadingHistory(true);
+      import("@/lib/api")
+        .then(({ getChatHistory }) => getChatHistory(externalSessionId))
+        .then((session) => {
+          const history: LocalMessage[] = (session.messages || []).map(
+            (m: any, i: number) => ({
+              id: `hist_${i}`,
+              role: m.role as "user" | "assistant",
+              content: m.content,
+              sources: m.sources,
+            })
+          );
+          setMessages(
+            history.length > 0 ? history : [WELCOME_MESSAGE]
+          );
+          setInternalSessionId(externalSessionId);
+        })
+        .catch(() => {
+          setMessages([WELCOME_MESSAGE]);
+        })
+        .finally(() => setLoadingHistory(false));
+    }
+  }, [externalSessionId]);
 
   const handleSend = async (content: string) => {
     const userMsg: LocalMessage = {
@@ -129,23 +166,36 @@ export function ChatWindow({
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-6">
         <div className="space-y-5">
-          {messages.map((msg) => (
-            <MessageBubble
-              key={msg.id}
-              role={msg.role}
-              content={msg.content}
-              sources={msg.sources}
-            />
-          ))}
-          {loading && (
+          {loadingHistory ? (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="flex items-center gap-2 text-sm text-muted-foreground"
+              className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground"
             >
               <Loader2 className="h-4 w-4 animate-spin" />
-              <span>Thinking...</span>
+              <span>Loading conversation...</span>
             </motion.div>
+          ) : (
+            <>
+              {messages.map((msg) => (
+                <MessageBubble
+                  key={msg.id}
+                  role={msg.role}
+                  content={msg.content}
+                  sources={msg.sources}
+                />
+              ))}
+              {loading && (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="flex items-center gap-2 text-sm text-muted-foreground"
+                >
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>Thinking...</span>
+                </motion.div>
+              )}
+            </>
           )}
         </div>
       </div>

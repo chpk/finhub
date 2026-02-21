@@ -85,14 +85,55 @@ class SearchVectorsArgs(BaseModel):
     top_k: int = Field(default=5, description="Number of results to return")
 
 
+class ListTablesArgs(BaseModel):
+    """Arguments for the list_all_tables tool."""
+    document_id: str | None = Field(default=None, description="Filter by document ID. None = show all loaded.")
+
+
+class InspectTableArgs(BaseModel):
+    """Arguments for the inspect_table tool."""
+    table_index: int = Field(description="Index of the table to inspect (0-based)")
+    num_rows: int = Field(default=5, description="Number of rows to preview")
+
+
+class RunPandasCodeArgs(BaseModel):
+    """Arguments for the run_pandas_code tool."""
+    code: str = Field(description="Multi-line Python/pandas code to execute. All loaded tables are available as tables[0], tables[1], etc. Each is a dict with a 'dataframe' key.")
+    table_index: int = Field(default=0, description="Primary table index; available as 'df' in the code")
+
+
 # ── Tool descriptors (for LLM function-calling) ───────────────────
 TOOL_DEFINITIONS = [
     {
         "type": "function",
         "function": {
+            "name": "list_all_tables",
+            "description": "List all available tables with their metadata (source file, page, type, columns, row count). Use this FIRST to understand what data is available before running queries.",
+            "parameters": ListTablesArgs.model_json_schema(),
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "inspect_table",
+            "description": "Preview the structure and first N rows of a specific table. Use this to understand column types and content before writing complex queries.",
+            "parameters": InspectTableArgs.model_json_schema(),
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "query_dataframe",
-            "description": "Execute a pandas expression on a loaded financial table. Use this to filter rows, aggregate values, compute ratios, etc. The table is available as 'df'.",
+            "description": "Execute a single pandas expression on a loaded financial table. The table is available as 'df'. E.g. 'df.describe()', 'df[df[\"Revenue\"] > 1000]'.",
             "parameters": QueryDataFrameArgs.model_json_schema(),
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_pandas_code",
+            "description": "Execute multi-line Python/pandas code for complex analysis (aggregations, pivots, joins, computations). The primary table is 'df'; all tables are in 'tables' list. Use 'result' variable to return output.",
+            "parameters": RunPandasCodeArgs.model_json_schema(),
         },
     },
     {
@@ -146,24 +187,25 @@ class AnalyticsState(BaseModel):
 _SYSTEM_PROMPT = """\
 You are a Senior Financial Analyst AI Agent for the NFRA Compliance Engine.
 You have access to financial tables extracted from PDF documents (annual reports,
-balance sheets, P&L statements, audit reports) that are loaded as pandas DataFrames.
+balance sheets, P&L statements, audit reports) that can be loaded as pandas DataFrames.
 
-Your capabilities:
-1. **query_dataframe** – Run pandas code on loaded tables (available as `df`).
-2. **extract_metrics** – Pull key financial ratios and KPIs.
-3. **compare_documents** – Compare metrics across companies or fiscal years.
-4. **generate_chart** – Create visualisations (bar, line, pie, radar, heatmap).
-5. **search_vectors** – Semantic search over regulatory and financial knowledge base.
+Your workflow (follow this order):
+1. **list_all_tables** – ALWAYS call this first to see what tables are available.
+2. **inspect_table** – Preview promising tables to understand their structure.
+3. **query_dataframe** or **run_pandas_code** – Analyse the data.
+4. **generate_chart** – Visualise results when helpful.
+5. **extract_metrics** / **compare_documents** – For standard KPIs and comparisons.
+6. **search_vectors** – Search the regulatory knowledge base for context.
 
 Guidelines:
-- Always inspect the table structure first (e.g. `df.columns.tolist()` or `df.head()`)
-  before writing complex queries.
+- ALWAYS start by listing and then inspecting relevant tables before running queries.
+- Use `run_pandas_code` for multi-step analysis (aggregations, pivots, joins).
+  Put your final answer in a variable called `result`.
 - When generating charts, produce clear, publication-quality visuals.
 - Cite specific numbers from the data to support your answers.
-- If a question cannot be answered from the loaded data, say so clearly and suggest
-  what additional data might be needed.
-- Think step-by-step. Use tools as needed.  When you have enough information to
-  answer the question, respond directly WITHOUT calling another tool.
+- If a question cannot be answered from the loaded data, say so clearly.
+- Think step-by-step. When you have enough information, respond directly
+  WITHOUT calling another tool.
 """
 
 _MAX_TOOL_ITERATIONS = 8
@@ -256,20 +298,29 @@ class AnalyticsEngine:
     ) -> dict[str, Any]:
         """Run the full agentic analysis loop.
 
+        The agent first receives a lightweight table catalogue (no data),
+        then uses tools to inspect and query only the tables it needs.
+
         Returns a dict with keys:
         - ``answer``: str -- the final natural-language answer
         - ``charts``: list[str] -- base-64 PNG images
         - ``metrics``: dict -- extracted metrics
         - ``tables_loaded``: int
         """
-        loaded_tables = await self._load_tables(document_ids)
+        all_tables = await self._load_tables(document_ids)
 
-        table_summary = self._summarise_tables(loaded_tables)
+        relevant = self._rank_tables_by_relevance(all_tables, question)
+        loaded_tables = relevant[: self._MAX_TABLES]
+
+        catalogue = self._build_table_catalogue(loaded_tables)
 
         user_content = (
-            f"Loaded {len(loaded_tables)} table(s) from documents.\n\n"
-            f"Table summaries:\n{table_summary}\n\n"
-            f"User question: {question}"
+            f"{len(loaded_tables)} table(s) available from "
+            f"{len(set(t['document_id'] for t in loaded_tables))} document(s).\n\n"
+            f"Table catalogue:\n{catalogue}\n\n"
+            f"User question: {question}\n\n"
+            "Start by calling list_all_tables or inspect_table to understand the data, "
+            "then use the appropriate tools to answer."
         )
 
         llm_with_tools = self._llm.bind(tools=TOOL_DEFINITIONS)
@@ -454,8 +505,14 @@ class AnalyticsEngine:
         metrics: dict[str, Any],
     ) -> str:
         """Dispatch to the correct tool handler."""
-        if name == "query_dataframe":
+        if name == "list_all_tables":
+            return self._tool_list_all_tables(args, tables)
+        elif name == "inspect_table":
+            return self._tool_inspect_table(args, tables)
+        elif name == "query_dataframe":
             return self._tool_query_dataframe(args, tables)
+        elif name == "run_pandas_code":
+            return self._tool_run_pandas_code(args, tables)
         elif name == "extract_metrics":
             return self._tool_extract_metrics(args, tables, metrics)
         elif name == "compare_documents":
@@ -466,6 +523,92 @@ class AnalyticsEngine:
             return await self._tool_search_vectors(args)
         else:
             return f"Unknown tool: {name}"
+
+    def _tool_list_all_tables(
+        self, args: dict[str, Any], tables: list[dict[str, Any]]
+    ) -> str:
+        """Return lightweight metadata for all loaded tables."""
+        doc_filter = args.get("document_id")
+        lines: list[str] = []
+        for i, t in enumerate(tables):
+            if doc_filter and t.get("document_id") != doc_filter:
+                continue
+            df: pd.DataFrame = t.get("dataframe", pd.DataFrame())
+            cols = list(df.columns) if not df.empty else t.get("column_headers", [])
+            lines.append(
+                f"[{i}] source={t['source_file']}, "
+                f"doc_id={t.get('document_id','?')}, "
+                f"type={t.get('financial_statement_type', 'unknown')}, "
+                f"page={t.get('page_number', '?')}, "
+                f"rows={t.get('row_count', 0)}, cols={len(cols)}, "
+                f"columns={cols[:12]}"
+            )
+        return "\n".join(lines) if lines else "No tables match the filter."
+
+    def _tool_inspect_table(
+        self, args: dict[str, Any], tables: list[dict[str, Any]]
+    ) -> str:
+        """Preview a specific table's structure and first N rows."""
+        idx = args.get("table_index", 0)
+        num_rows = min(args.get("num_rows", 5), 20)
+
+        if idx >= len(tables):
+            return f"Table index {idx} out of range ({len(tables)} available)."
+
+        t = tables[idx]
+        df: pd.DataFrame = t.get("dataframe", pd.DataFrame())
+        if df.empty:
+            return f"Table {idx} is empty."
+
+        info_lines = [
+            f"Table {idx}: {t['source_file']} (page {t.get('page_number','?')})",
+            f"Type: {t.get('financial_statement_type', 'unknown')}",
+            f"Shape: {df.shape[0]} rows x {df.shape[1]} columns",
+            f"Columns: {list(df.columns)}",
+            f"Dtypes:\n{df.dtypes.to_string()}",
+            f"\nFirst {num_rows} rows:\n{df.head(num_rows).to_string()}",
+        ]
+        return "\n".join(info_lines)
+
+    def _tool_run_pandas_code(
+        self, args: dict[str, Any], tables: list[dict[str, Any]]
+    ) -> str:
+        """Execute multi-line Python/pandas code with access to all tables."""
+        code = args.get("code", "")
+        idx = args.get("table_index", 0)
+
+        if not tables:
+            return "No tables loaded."
+        if idx >= len(tables):
+            idx = 0
+
+        import numpy as np
+
+        df = tables[idx].get("dataframe", pd.DataFrame())
+        all_dfs = [t.get("dataframe", pd.DataFrame()) for t in tables]
+
+        local_ns: dict[str, Any] = {
+            "df": df,
+            "tables": tables,
+            "all_dfs": all_dfs,
+            "pd": pd,
+            "np": np,
+            "result": None,
+        }
+
+        try:
+            exec(code, {"__builtins__": {}}, local_ns)
+        except Exception as e:
+            return f"Code execution error: {e}"
+
+        result = local_ns.get("result")
+        if result is None:
+            return "Code executed but no `result` variable was set. Assign your output to `result`."
+        if isinstance(result, pd.DataFrame):
+            return result.to_string(max_rows=50, max_cols=20)
+        if isinstance(result, pd.Series):
+            return result.to_string(max_rows=50)
+        return str(result)
 
     def _tool_query_dataframe(
         self, args: dict[str, Any], tables: list[dict[str, Any]]
@@ -664,6 +807,80 @@ class AnalyticsEngine:
 
     # ── Internal helpers ───────────────────────────────────────────
 
+    def _rank_tables_by_relevance(
+        self, tables: list[dict[str, Any]], question: str
+    ) -> list[dict[str, Any]]:
+        """Score and sort tables by relevance to the user's question.
+
+        Uses keyword overlap between the question and table metadata
+        (column headers, financial_statement_type, source_file).
+        Tables with higher relevance scores come first.
+        """
+        if not question or not tables:
+            return tables
+
+        q_tokens = set(re.findall(r"\w+", question.lower()))
+        financial_keywords = {
+            "revenue", "profit", "loss", "income", "expense", "asset",
+            "liability", "equity", "cash", "flow", "balance", "sheet",
+            "ebitda", "eps", "roe", "ratio", "debt", "dividend",
+            "operating", "net", "gross", "total", "current",
+        }
+        q_finance = q_tokens & financial_keywords
+
+        scored: list[tuple[float, int, dict[str, Any]]] = []
+        for idx, t in enumerate(tables):
+            score = 0.0
+            df: pd.DataFrame = t.get("dataframe", pd.DataFrame())
+            cols = [str(c).lower() for c in df.columns] if not df.empty else []
+            col_tokens = set()
+            for c in cols:
+                col_tokens.update(re.findall(r"\w+", c))
+
+            overlap = len(q_tokens & col_tokens)
+            score += overlap * 2.0
+
+            finance_col_overlap = len(q_finance & col_tokens)
+            score += finance_col_overlap * 3.0
+
+            fst = (t.get("financial_statement_type") or "").lower()
+            if fst:
+                fst_tokens = set(re.findall(r"\w+", fst))
+                score += len(q_tokens & fst_tokens) * 4.0
+
+            src = (t.get("source_file") or "").lower()
+            src_tokens = set(re.findall(r"\w+", src))
+            score += len(q_tokens & src_tokens) * 1.5
+
+            if t.get("row_count", 0) > 2:
+                score += 0.5
+
+            scored.append((score, idx, t))
+
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        return [item[2] for item in scored]
+
+    def _build_table_catalogue(self, tables: list[dict[str, Any]]) -> str:
+        """Build a compact catalogue string listing table metadata only (no data)."""
+        if not tables:
+            return "No tables available."
+
+        lines: list[str] = []
+        for i, t in enumerate(tables):
+            df: pd.DataFrame = t.get("dataframe", pd.DataFrame())
+            cols = list(df.columns) if not df.empty else t.get("column_headers", [])
+            col_preview = cols[:8]
+            if len(cols) > 8:
+                col_preview.append(f"+{len(cols) - 8} more")
+            lines.append(
+                f"[{i}] {t['source_file']} | "
+                f"type={t.get('financial_statement_type', 'unknown')} | "
+                f"page={t.get('page_number', '?')} | "
+                f"{t.get('row_count', 0)} rows | "
+                f"cols={col_preview}"
+            )
+        return "\n".join(lines)
+
     async def _load_tables(
         self, document_ids: list[str] | None = None
     ) -> list[dict[str, Any]]:
@@ -753,55 +970,6 @@ class AnalyticsEngine:
                         })
 
         return all_tables[: self._MAX_TABLES]
-
-    def _summarise_tables(self, tables: list[dict[str, Any]]) -> str:
-        """Create a compact text summary of loaded tables for the LLM context.
-
-        Stays within ``_MAX_SUMMARY_CHARS`` to avoid blowing the token budget.
-        """
-        if not tables:
-            return "No tables loaded."
-
-        show = tables[: self._MAX_TABLES]
-        omitted = len(tables) - len(show)
-
-        lines: list[str] = []
-        total_chars = 0
-        for i, t in enumerate(show):
-            df: pd.DataFrame = t.get("dataframe", pd.DataFrame())
-            cols = list(df.columns) if not df.empty else t.get("column_headers", [])
-            col_display = cols[: self._MAX_COLS_SHOWN]
-            if len(cols) > self._MAX_COLS_SHOWN:
-                col_display.append(f"... +{len(cols) - self._MAX_COLS_SHOWN} more")
-
-            header = (
-                f"Table {i}: source={t['source_file']}, "
-                f"type={t.get('financial_statement_type', 'unknown')}, "
-                f"page={t.get('page_number', '?')}, "
-                f"rows={t.get('row_count', 0)}, "
-                f"columns={col_display}"
-            )
-            lines.append(header)
-            total_chars += len(header)
-
-            if not df.empty and total_chars < self._MAX_SUMMARY_CHARS:
-                preview = df.head(self._MAX_TABLE_PREVIEW_ROWS).to_string(
-                    max_cols=self._MAX_COLS_SHOWN
-                )
-                if total_chars + len(preview) < self._MAX_SUMMARY_CHARS:
-                    lines.append(f"  Preview:\n{preview}")
-                    total_chars += len(preview)
-
-            if total_chars >= self._MAX_SUMMARY_CHARS:
-                lines.append(f"... (remaining tables omitted for brevity)")
-                break
-
-        if omitted > 0:
-            lines.append(
-                f"\n({omitted} additional table(s) loaded but not shown in summary)"
-            )
-
-        return "\n".join(lines)
 
     def _find_metric_in_tables(
         self, tables: list[dict[str, Any]], metric: str
